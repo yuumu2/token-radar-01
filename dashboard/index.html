@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token Launch Radar</title>
+  <link rel="stylesheet" href="app.css">
+  <script defer src="../data.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main>
+    <header class="masthead">
+      <div>
+        <h1>Token Launch Radar</h1>
+        <p id="snapshot" role="status"></p>
+      </div>
+      <a href="#model">How scores work <span aria-hidden="true">↓</span></a>
+    </header>
+    <div id="radar" hidden>
+      <div class="workspace">
+        <section class="panel board" aria-labelledby="board-title">
+          <h2 id="board-title">Protocol rankings</h2>
+          <form class="filters" id="filters">
+            <label>Search <input id="search" type="search" placeholder="Protocol name or slug"></label>
+            <label>Category <select id="category"><option value="">All categories</option></select></label>
+            <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+            <label class="checkbox"><input id="watchlist" type="checkbox"> Watchlist only</label>
+          </form>
+          <p id="count" role="status"></p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Sortable protocol rankings">
+            <table aria-label="Protocol rankings">
+              <thead id="columns"></thead>
+              <tbody id="rows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel profile" id="profile" aria-labelledby="profile-title">
+          <h2 id="profile-title" tabindex="-1">Protocol profile</h2>
+          <div id="profile-body"></div>
+        </section>
+      </div>
+      <section class="panel methodology" id="model" aria-labelledby="model-title">
+        <h2 id="model-title">How scores work</h2>
+        <p id="coverage"></p>
+        <dl id="method"></dl>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
