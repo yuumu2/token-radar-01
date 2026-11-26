@@ -18,6 +18,7 @@ const usd = value => dollars.format(value);
 const compact = value => compactDollars.format(value);
 const pct = value => percent.format(value);
 const fixed = value => value.toFixed(2);
+const sig4 = value => String(Number(value.toPrecision(4)));
 const miss = metrics => `x${fixed(metrics.typical_error_x)}`;
 const categoryName = category => category ?? 'Uncategorized';
 const range = (row, format) => `${format(row.range_low_usd)} – ${format(row.range_high_usd)}`;
@@ -65,7 +66,7 @@ function renderOverview() {
     ['Leave-one-out miss', miss(loo.size_offsets), `Typical error · ${number(value_peers)} peers`],
     ['Walk-forward miss', miss(walk_forward.size_offsets), 'Typical error · later-listed half'],
     ['Range honesty', pct(range_coverage), 'Held-out peers inside P25–P75'],
-    ['Odds Brier · ten-fold', odds.tenfold_brier.toFixed(4), `Base rate ${odds.base_brier_tenfold.toFixed(4)}`],
+    ['Odds Brier · ten-fold', odds.tenfold_brier.toFixed(4), `Null Brier ${odds.base_brier_tenfold.toFixed(4)} · base rate ${(odds.base_rate * 100).toFixed(1)}%`],
     ['Terms surviving', `${valueKept} value · ${oddsKept} odds`, `Odds kept ${oddsKept} of ${evidence.odds_terms.length} tested`],
     ['Farm-worthy', number(farmCount), `Of ${number(accounting.ranked)} ranked protocols`],
     ['Watchlist coverage', `${watchCount}/${watchlist_total}`, 'Watchlist protocols ranked'],
@@ -89,11 +90,14 @@ function renderOverview() {
   const excluded = excluded_by_reason.reduce((value, item) => value + item.count, 0);
   const accounted = tokenized + rows.length + excluded;
   const actualChecksum = checksum(rows);
+  const checksumMatches = actualChecksum === radar.checksum;
   const checks = [
     [`${number(rows.length)} ranked rows`, rows.length === ranked],
     [`${usd(sum)} total implied`, sum === radar.board_value_sum_usd],
     [`${watchCount}/${watchlist_total} watchlist rows`, watchCount === watchlist_total],
-    [`Board checksum ${actualChecksum}`, actualChecksum === radar.checksum],
+    [checksumMatches
+      ? `Board checksum ${actualChecksum} · ${number(rows.length)} / ${number(rows.length)} rows recomputed in this page · matched`
+      : `Board checksum ${actualChecksum} · in-page recompute mismatch`, checksumMatches],
     [`${number(accounted)} / ${number(total)} accounted`,
       accounted === total && total === tokenized + pretoken && pretoken === ranked + excluded_total
         && excluded === excluded_total && rows.length === ranked],
@@ -146,14 +150,18 @@ function renderMethod() {
     ));
   }
   const base = validation.odds;
-  byId('odds-terms').append(evidenceRow('Base rate', [
+  const oddsTerms = byId('odds-terms');
+  oddsTerms.append(evidenceRow('Null Brier (base-rate predictor)', [
     { value: base.base_brier_tenfold.toFixed(4) }, { value: base.base_brier_walk_forward.toFixed(4) },
-  ], 'reference'));
+  ], 'reference', `Base rate ${(base.base_rate * 100).toFixed(1)}% — every peer predicted at the base rate`));
   for (const term of evidence.odds_terms) {
-    byId('odds-terms').append(evidenceRow(term.term, [
+    oddsTerms.append(evidenceRow(term.term, [
       { value: term.tenfold_brier.toFixed(4) }, { value: term.walk_forward_brier.toFixed(4) },
     ], term.verdict));
   }
+  const young = radar.rows.filter(row => row.age_days < 730).length;
+  oddsTerms.closest('section').append(el('p',
+    `${young} of ${radar.rows.length} ranked rows are younger than the 730-day peer cohort; their odds are extrapolations of the age fit.`, 'caution'));
 
   const fit = evidence.fitted;
   byId('coefficients').append(...facts([
@@ -163,12 +171,25 @@ function renderMethod() {
     ['Logit intercept', fixed(fit.logit_intercept)],
     ['Log-age coefficient', fixed(fit.logit_coef_log_age)],
   ]).children);
-  for (const entry of category_offsets) {
-    const row = el('tr');
-    const label = el('th', categoryName(entry.category));
-    label.scope = 'row';
-    row.append(label, el('td', number(entry.peers), 'num'), el('td', `${fixed(entry.offset_x)}×`, 'num'));
-    byId('offsets').append(row);
+  for (let i = 0; i < 3; i++) {
+    const start = Math.ceil(i * category_offsets.length / 3);
+    const end = Math.ceil((i + 1) * category_offsets.length / 3);
+    const table = el('table');
+    table.setAttribute('aria-label', `Category offsets, part ${i + 1} of 3`);
+    const head = table.createTHead().insertRow();
+    for (const title of ['Category', 'Peers', 'Offset']) {
+      const cell = el('th', title, title === 'Category' ? undefined : 'num');
+      cell.scope = 'col';
+      head.append(cell);
+    }
+    const body = table.createTBody();
+    for (const entry of category_offsets.slice(start, end)) {
+      const row = body.insertRow();
+      const label = el('th', categoryName(entry.category));
+      label.scope = 'row';
+      row.append(label, el('td', number(entry.peers), 'num'), el('td', `${fixed(entry.offset_x)}×`, 'num'));
+    }
+    byId('offsets').append(table);
   }
   const labels = {
     formula: 'Scoring formula', fit: 'Size curve', offsets: 'Category offsets', odds: 'Token odds',
@@ -224,12 +245,15 @@ function renderProfile(row, offsets) {
   ]);
   const launchFormula = row.tvl_usd === 0
     ? 'Zero recorded TVL gives a launch value of'
-    : `10^(${fixed(fitted.intercept)} + ${fixed(fitted.slope)} × log10(${number(row.tvl_usd)})) × ${fixed(offset.offset_x)} category offset ≈`;
+    : `10^(${sig4(fitted.intercept)} + ${sig4(fitted.slope)} × log10(${number(row.tvl_usd)})) × ${sig4(offset.offset_x)} category offset ≈`;
   const arithmetic = el('p', `${launchFormula} `, 'formula');
   arithmetic.append(el('strong', usd(row.launch_value_usd)));
   const oddsLine = `Logistic on log age fitted on ${number(odds.peers)} peers (base rate ${(odds.base_rate * 100).toFixed(1)}%). At ${fixed(years)} years, this row’s odds are ${pct(row.odds)}.`;
-  valuation.append(arithmetic, el('p', oddsLine),
-    el('p', `${usd(row.launch_value_usd)} launch × ${pct(row.odds)} odds ≈ ${usd(row.implied_value_usd)} implied.`, 'formula'));
+  valuation.append(arithmetic, el('p', oddsLine));
+  if (row.age_days < 730) {
+    valuation.append(el('p', 'Extrapolated — this protocol is younger than the 2-year peer cohort (protocols listed at least 730 days before the snapshot) that the odds were fitted on, so its odds extend the age fit below the cohort’s range.', 'caution'));
+  }
+  valuation.append(el('p', `${usd(row.launch_value_usd)} launch × ${pct(row.odds)} odds ≈ ${usd(row.implied_value_usd)} implied.`, 'formula'));
   const economics = detailBlock('Farm economics', [
     ['Position band top', usd(row.farm_budget_usd)],
     ['Participating capital', usd(participating)],

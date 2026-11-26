@@ -145,7 +145,7 @@ function isEligible(protocol: Protocol): boolean {
 
 // Editorial field notes from the operator. These only extend the generated farm plans.
 const OPERATOR_NOTES = new Map([
-  ['onre', 'Field note from the operator, who farms OnRe directly: the reinsurance vaults have run for years without a depeg the operator can recall, liquidity has always been sufficient to enter and exit, and the points balance keeps accruing while the position is held.'],
+  ['onre', 'Field note from the operator, who farms OnRe directly: the reinsurance vaults have run since its July 2025 listing without a depeg the operator can recall, liquidity has always been sufficient to enter and exit, and the points balance keeps accruing while the position is held.'],
   ['plume-vaults', "Caution from the operator's desk check (late November 2026): Plume Vaults routes exposure into RWA yield vaults such as YieldFi yUSD, whose redemption is not instant - NAV is updated twice a week, redemptions wait for two updates and depend on the manager setting funds aside - and the only yUSD pool on Plume held about $5 of liquidity with no trades. Verify your exit route with a small test redemption before depositing size."],
 ]);
 
@@ -272,7 +272,8 @@ function fitAndValidateValue(peers: ValuePeer[]) {
   });
   const { train, test } = halfSplit(peers);
   const earlierFit = fitValue(train);
-  const walkForward = test.map(p => earlierFit.size(p.logTvl) + earlierFit.offset(p.category) - p.logMcap);
+  const walkForwardSize = test.map(p => earlierFit.size(p.logTvl) - p.logMcap);
+  const walkForwardOffsets = test.map(p => earlierFit.size(p.logTvl) + earlierFit.offset(p.category) - p.logMcap);
   const sorted = [...offsetResiduals].sort((a, b) => a - b);
   const quantile = (f: number) => sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(f * sorted.length)))];
   const q25 = quantile(0.25);
@@ -282,7 +283,10 @@ function fitAndValidateValue(peers: ValuePeer[]) {
     validation: {
       value_peers: peers.length,
       loo: { size_only: valueMetrics(sizeResiduals), size_offsets: valueMetrics(offsetResiduals) },
-      walk_forward: { size_offsets: valueMetrics(walkForward) },
+      walk_forward: {
+        size_only: valueMetrics(walkForwardSize),
+        size_offsets: valueMetrics(walkForwardOffsets),
+      },
       residual_q25: q25,
       residual_q75: q75,
       range_coverage: offsetResiduals.filter(r => r >= q25 && r <= q75).length / peers.length,
@@ -494,6 +498,13 @@ export function buildRadar(snapshot: Snapshot) {
     });
   const offsets = categoryOffsets.map(row => row.offset_log10);
   const total = snapshot.protocols.length;
+  const { loo, walk_forward: walkForward } = value.validation;
+  const looSize = loo.size_only.typical_error_x.toFixed(2);
+  const looOff = loo.size_offsets.typical_error_x.toFixed(2);
+  const w2Size = (loo.size_only.within2x * 100).toFixed(1) + '%';
+  const w2Off = (loo.size_offsets.within2x * 100).toFixed(1) + '%';
+  const wfSize = walkForward.size_only.typical_error_x.toFixed(2);
+  const wfOff = walkForward.size_offsets.typical_error_x.toFixed(2);
   const radar = {
     as_of: snapshot.as_of,
     floor_usd: snapshot.floor_usd,
@@ -516,17 +527,18 @@ export function buildRadar(snapshot: Snapshot) {
       offsets: 'Each category’s mean residual is weighted by its peer count and shrunk toward the global mean residual with six observations (k=6). Categories without peers use the global mean.',
       odds: `Age-only logistic regression uses ${oddsPeers.length} peers listed at least 730 days before the snapshot, with a recorded token base rate of ${oddsModel.validation.base_rate.toFixed(3)}. These odds are the recorded history of comparable peers, not a forecast of whether or when any protocol launches a token.`,
       range: 'The P25–P75 range uses leave-one-out residual quantiles for the size curve with category offsets, applied to launch value and scaled by token odds.',
-      verdict: 'This planning estimate assumes early users receive 10% of launch supply, with participating capital of 10% of TVL or $2 million, whichever is larger. Your share uses the top of the position-size band. Net subtracts $60 on Ethereum or $10 on other chains. The 26-week plan budgets 6.3 hours for setup, weekly checks, and exit. Farm requires at least $150 net and $20 per hour. Other positive net values are Marginal. Zero or negative net values are Skip.',
+      verdict: `This planning estimate assumes early users receive 10% of launch supply, with participating capital = max(${FARM_PARTICIPATION_RATE * 100}% of TVL, $${FARM_PARTICIPATION_FLOOR_USD.toLocaleString('en-US')}) per protocol. Your share uses the top of the position-size band. Net subtracts $60 on Ethereum or $10 on other chains. The 26-week plan budgets 6.3 hours for setup, weekly checks, and exit. Farm requires at least $150 net and $20 per hour. Other positive net values are Marginal. Zero or negative net values are Skip.`,
       eligibility: 'The board requires both token fields to be empty and applies no TVL floor. It excludes CEX, Liquid Staking, Liquid Restaking, Restaked BTC, and every category containing Bridge. Names ending in a version marker such as V2 or 2.0, containing the whole words wrapped, staked, or staking, or starting with Binance, Coinbase, Bybit, Kraken, Bitget, OKX, Bitfinex, or Gemini are excluded.',
       scoring: 'Every eligible protocol uses the same scoring formula. Protocol names determine eligibility only. Operator notes appear in farm plans and have no effect on values or ranks.',
     },
     validation: { ...value.validation, odds: oddsModel.validation },
     evidence: {
       value_terms: [
-        { term: 'Size curve (log-log OLS)', verdict: 'kept', loo: value.validation.loo.size_only },
+        { term: 'Size curve (log-log OLS)', verdict: 'kept', loo: loo.size_only, walk_forward: walkForward.size_only },
         {
           term: '+ Category offsets (k=6 shrinkage)', verdict: 'kept',
-          loo: value.validation.loo.size_offsets, walk_forward: value.validation.walk_forward.size_offsets,
+          loo: loo.size_offsets, walk_forward: walkForward.size_offsets,
+          detail: `Kept for the within-2x and walk-forward gains: LOO typical error worsens (x${looSize} → x${looOff}) while LOO within-2x improves (${w2Size} → ${w2Off}) and walk-forward typical error improves (x${wfSize} → x${wfOff}).`,
         },
         { term: '+ 7d growth', verdict: 'dropped', detail: `Project experiment: growth + age OLS increased LOO typical error to ${EXPERIMENT_GROWTH_AGE_LOO_ERROR_X.toFixed(2)}x.` },
         { term: '+ Age', verdict: 'dropped', detail: `Project experiment: the full combination of size, category offsets, growth, and age increased LOO typical error to ${EXPERIMENT_FULL_COMBO_LOO_ERROR_X.toFixed(2)}x.` },
