@@ -1,3 +1,15 @@
+const FARM_ALLOC_SHARE = 0.10;
+const FARM_PARTICIPATION_RATE = 0.10;
+const FARM_PARTICIPATION_FLOOR_USD = 2_000_000;
+const FARM_HOURS = 6.3; // 1.5 hours setup, 26 weekly ten-minute checks, and 0.5 hours exit.
+const FARM_TX_ETH_USD = 60;
+const FARM_TX_OTHER_USD = 10;
+const FARM_VERDICT_NET_MIN = 150;
+const FARM_VERDICT_PER_HOUR_MIN = 20;
+
+const EXPERIMENT_GROWTH_AGE_LOO_ERROR_X = 3.84;
+const EXPERIMENT_FULL_COMBO_LOO_ERROR_X = 4.22;
+
 interface Protocol {
   slug: string;
   name: string;
@@ -31,9 +43,14 @@ interface BoardRow {
   change_7d: number | null;
   listed_at: string | null;
   age_days: number;
-  multiple_used: number;
-  growth_multiplier: number;
-  maturity_multiplier: number;
+  launch_value_usd: number;
+  odds: number;
+  range_low_usd: number;
+  range_high_usd: number;
+  verdict: 'Farm' | 'Marginal' | 'Skip';
+  farm_net_usd: number;
+  farm_per_hour_usd: number;
+  farm_budget_usd: number;
   watchlist: boolean;
 }
 
@@ -110,14 +127,20 @@ function isPreToken(protocol: Protocol): boolean {
 
 const excludedCategories = new Set(['Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
 
+const exclusionRules: [string, (p: Protocol) => boolean][] = [
+  ['Category excluded (CEX, liquid staking, restaked BTC)', p => excludedCategories.has(p.category ?? '')],
+  ['Bridge category', p => p.category?.includes('Bridge') ?? false],
+  ['Name ends in a version marker', p => /\s(?:v\d+(?:\.\d+)?|\d+\.\d+)$/i.test(p.name)],
+  ['Name contains wrapped, staked or staking', p => /\b(?:wrapped|staked|staking)\b/i.test(p.name)],
+  ['Name starts with an exchange brand', p => /^(?:Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)/i.test(p.name)],
+];
+
+function exclusionIndex(protocol: Protocol): number {
+  return exclusionRules.findIndex(([, matches]) => matches(protocol));
+}
+
 function isEligible(protocol: Protocol): boolean {
-  const { category, name } = protocol;
-  return isPreToken(protocol)
-    && !excludedCategories.has(category ?? '')
-    && !category?.includes('Bridge')
-    && !/\s(?:v\d+(?:\.\d+)?|\d+\.\d+)$/i.test(name)
-    && !/\b(?:wrapped|staked|staking)\b/i.test(name)
-    && !/^(?:Binance|Coinbase|Bybit|Kraken|Bitget|OKX|Bitfinex|Gemini)/i.test(name);
+  return isPreToken(protocol) && exclusionIndex(protocol) === -1;
 }
 
 // Editorial field notes from the operator. These only extend the generated farm plans.
@@ -146,17 +169,32 @@ const categoryActions = {
   generic: 'Pick one documented core action, try it with a small test amount, verify the resulting balance or receipt, and check that you can exit before committing more.',
 };
 
+const entrySurfaces = {
+  vaults: 'the vault deposit page',
+  staking: 'the staking page',
+  bridges: 'the bridge transfer page',
+  lending: 'the supply markets page',
+  dexs: 'the liquidity pools page',
+  rwa: 'the subscription and onboarding page',
+  generic: 'the main app dashboard',
+};
+
+function positionTier(tvl: number) {
+  if (tvl >= 500_000_000) return { band: '$2,000-$10,000', budgetHigh: 10_000 };
+  if (tvl >= 100_000_000) return { band: '$1,000-$5,000', budgetHigh: 5_000 };
+  if (tvl >= 50_000_000) return { band: '$500-$2,500', budgetHigh: 2_500 };
+  return { band: '$250-$1,500', budgetHigh: 1_500 };
+}
+
 function farmPlan(protocol: Protocol): string[] {
   const { name, category, chains, tvl_usd } = protocol;
   const chain = chains[0] ?? 'its main chain as identified in the official docs';
-  const band = tvl_usd >= 500_000_000 ? '$2,000-$10,000'
-    : tvl_usd >= 100_000_000 ? '$1,000-$5,000'
-    : tvl_usd >= 50_000_000 ? '$500-$2,500' : '$250-$1,500';
+  const { band } = positionTier(tvl_usd);
   const family = category === null ? undefined : familyByCategory.get(category);
   const action = family ?? (category === 'Lending' || category === 'Uncollateralized Lending' ? 'lending'
     : category === 'Dexs' ? 'dexs' : category === 'RWA' ? 'rwa' : 'generic');
   return [
-    `Read ${name}'s official docs and announcements, confirm whether a points or rewards program is currently announced, and verify the official app for ${chain}.`,
+    `Read ${name}'s official docs and announcements, confirm whether a points or rewards program is currently announced, and use the official app to locate ${entrySurfaces[action]} on ${chain}.`,
     `For ${name} on ${chain}, follow the documented workflow. ${categoryActions[action]}`,
     `Use ${band} as the position-size band if proceeding on ${chain}. Ethereum mainnet often costs $5-$25 per transaction in normal conditions, while L2s like Base or Arbitrum usually cost under $0.50. Check the live fee before signing.`,
     `Spend 10 minutes weekly reviewing the position over a 3-6 month horizon. Keep records of deposits, including amounts, dates, and transaction hashes, for any future snapshot.`,
@@ -164,55 +202,268 @@ function farmPlan(protocol: Protocol): string[] {
   ];
 }
 
-export function buildRadar(snapshot: Snapshot) {
-  const ratiosByCategory = new Map<string | null, number[]>();
-  const globalRatios: number[] = [];
-  for (const p of snapshot.protocols) {
-    if (isPreToken(p) || p.mcap_usd === null || p.tvl_usd <= 0) continue;
-    const ratio = Math.max(0.01, Math.min(5, p.mcap_usd / p.tvl_usd));
-    const ratios = ratiosByCategory.get(p.category) ?? [];
-    ratios.push(ratio);
-    ratiosByCategory.set(p.category, ratios);
-    globalRatios.push(ratio);
-  }
-  if (!globalRatios.length) throw new Error('The snapshot contains no tokenized peers with market cap and positive TVL');
+interface ValuePeer {
+  category: Protocol['category'];
+  logTvl: number;
+  logMcap: number;
+  listed: number;
+}
 
-  const globalMedian = median(globalRatios);
-  const categories = [...new Set(snapshot.protocols.map(p => p.category))]
-    .sort((a, b) => compareText(a ?? '', b ?? ''));
-  const categoryMultiples = categories.map(category => {
-    const categoryRatios = ratiosByCategory.get(category) ?? [];
-    let ratios = categoryRatios;
-    const family = category === null ? undefined : familyByCategory.get(category);
-    if (ratios.length < 3 && family) {
-      ratios = families[family].flatMap(member => ratiosByCategory.get(member) ?? []);
-    }
-    const n = ratios.length;
-    const middle = n ? median(ratios) : null;
-    const used = middle === null ? globalMedian : (middle * n + globalMedian * 6) / (n + 6);
+function fitValue(peers: ValuePeer[]) {
+  // Solve the two normal equations for the intercept and log-TVL slope.
+  let sumX = 0;
+  let sumY = 0;
+  let sumXX = 0;
+  let sumXY = 0;
+  for (const { logTvl: x, logMcap: y } of peers) {
+    sumX += x;
+    sumY += y;
+    sumXX += x * x;
+    sumXY += x * y;
+  }
+  const n = peers.length;
+  const determinant = n * sumXX - sumX * sumX;
+  const slope = determinant > 0 && peers.some(p => p.logTvl !== peers[0].logTvl)
+    ? (n * sumXY - sumX * sumY) / determinant : 0;
+  const intercept = (sumY - slope * sumX) / n;
+  const size = (logTvl: number) => intercept + slope * logTvl;
+
+  const counts = new Map<Protocol['category'], { sum: number; n: number }>();
+  let sumResidual = 0;
+  for (const peer of peers) {
+    const residual = peer.logMcap - size(peer.logTvl);
+    sumResidual += residual;
+    const group = counts.get(peer.category) ?? { sum: 0, n: 0 };
+    group.sum += residual;
+    group.n++;
+    counts.set(peer.category, group);
+  }
+  const globalMean = sumResidual / n;
+  const offset = (category: Protocol['category']) => {
+    const group = counts.get(category);
+    return group ? (group.sum + globalMean * 6) / (group.n + 6) : globalMean;
+  };
+  return { intercept, slope, counts, size, offset };
+}
+
+function halfSplit<T extends { listed: number }>(peers: T[]) {
+  const sorted = [...peers].sort((a, b) => a.listed - b.listed);
+  const midpoint = Math.floor(sorted.length / 2);
+  return { train: sorted.slice(0, midpoint), test: sorted.slice(midpoint) };
+}
+
+function valueMetrics(residuals: number[]) {
+  return {
+    median_ratio: 10 ** median(residuals),
+    typical_error_x: 10 ** median(residuals.map(Math.abs)),
+    within2x: residuals.filter(r => Math.abs(r) <= Math.log10(2)).length / residuals.length,
+  };
+}
+
+function fitAndValidateValue(peers: ValuePeer[]) {
+  if (peers.length < 2) throw new Error('Value validation requires at least two peers');
+  const fit = fitValue(peers);
+  const sizeResiduals: number[] = [];
+  const offsetResiduals: number[] = [];
+  peers.forEach((p, i) => {
+    const fold = fitValue(peers.filter((_, j) => j !== i));
+    sizeResiduals.push(fold.size(p.logTvl) - p.logMcap);
+    offsetResiduals.push(fold.size(p.logTvl) + fold.offset(p.category) - p.logMcap);
+  });
+  const { train, test } = halfSplit(peers);
+  const earlierFit = fitValue(train);
+  const walkForward = test.map(p => earlierFit.size(p.logTvl) + earlierFit.offset(p.category) - p.logMcap);
+  const sorted = [...offsetResiduals].sort((a, b) => a - b);
+  const quantile = (f: number) => sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(f * sorted.length)))];
+  const q25 = quantile(0.25);
+  const q75 = quantile(0.75);
+  return {
+    fit,
+    validation: {
+      value_peers: peers.length,
+      loo: { size_only: valueMetrics(sizeResiduals), size_offsets: valueMetrics(offsetResiduals) },
+      walk_forward: { size_offsets: valueMetrics(walkForward) },
+      residual_q25: q25,
+      residual_q75: q75,
+      range_coverage: offsetResiduals.filter(r => r >= q25 && r <= q75).length / peers.length,
+    },
+  };
+}
+
+interface OddsPeer {
+  category: Protocol['category'];
+  listed: number;
+  hasToken: number;
+  logAge: number;
+  logTvl: number;
+  logChains: number;
+  growth: number;
+}
+
+const oddsTerms = [
+  { term: 'Age (log years listed)', verdict: 'kept' },
+  { term: '+ Category token share (k=10 shrinkage)', verdict: 'mixed - not used' },
+  { term: '+ Size (log10 TVL)', verdict: 'not used' },
+  { term: '+ Chain count (log)', verdict: 'not used' },
+  { term: '+ 7d growth', verdict: 'not used' },
+];
+
+function tokenCount(peers: OddsPeer[]): number {
+  return peers.reduce((sum, p) => sum + p.hasToken, 0);
+}
+
+function sigmoid(logit: number): number {
+  return 1 / (1 + Math.exp(-logit));
+}
+
+function fitLogit(train: OddsPeer[], featureCount: number) {
+  const n = train.length;
+  const tokens = tokenCount(train);
+  const baseRate = tokens / n;
+  const categories = new Map<Protocol['category'], { tokens: number; n: number }>();
+  for (const p of train) {
+    const group = categories.get(p.category) ?? { tokens: 0, n: 0 };
+    group.tokens += p.hasToken;
+    group.n++;
+    categories.set(p.category, group);
+  }
+
+  const features = (p: OddsPeer) => {
+    const group = categories.get(p.category);
+    const share = group ? (group.tokens + baseRate * 10) / (group.n + 10) : baseRate;
+    return [p.logAge, share, p.logTvl, p.logChains, p.growth].slice(0, featureCount);
+  };
+  const matrix = train.map(features);
+  const means = matrix[0].map((_, j) => matrix.reduce((sum, row) => sum + row[j], 0) / n);
+  const deviations = means.map((mean, j) =>
+    Math.max(Math.sqrt(matrix.reduce((sum, row) => sum + (row[j] - mean) ** 2, 0) / n), 1e-9));
+  const standardize = (row: number[]) => row.map((value, j) => (value - means[j]) / deviations[j]);
+  const standardized = matrix.map(standardize);
+  let weights: number[] = Array(featureCount).fill(0);
+  let intercept = Math.log((tokens + 0.5) / (n - tokens + 0.5));
+  const predictStandardized = (row: number[]) =>
+    sigmoid(intercept + row.reduce((sum, value, j) => sum + value * weights[j], 0));
+
+  for (let i = 0; i < 300; i++) {
+    let interceptGradient = 0;
+    const gradients: number[] = Array(featureCount).fill(0);
+    standardized.forEach((row, k) => {
+      const error = predictStandardized(row) - train[k].hasToken;
+      interceptGradient += error;
+      row.forEach((value, j) => { gradients[j] += error * value; });
+    });
+    intercept -= 0.1 * interceptGradient / n;
+    weights = weights.map((weight, j) => weight - 0.1 * gradients[j] / n - 0.001 * weight);
+  }
+
+  const coefficients = weights.map((weight, j) => weight / deviations[j]);
+  return {
+    intercept: intercept - coefficients.reduce((sum, weight, j) => sum + weight * means[j], 0),
+    coefficients,
+    predict: (p: OddsPeer) => predictStandardized(standardize(features(p))),
+  };
+}
+
+function brier(peers: OddsPeer[], predict: (peer: OddsPeer, index: number) => number): number {
+  return peers.reduce((sum, peer, index) => sum + (predict(peer, index) - peer.hasToken) ** 2, 0) / peers.length;
+}
+
+function fitAndValidateOdds(peers: OddsPeer[]) {
+  if (peers.length < 2) throw new Error('Odds validation requires at least two peers');
+  const fit = fitLogit(peers, 1);
+  const { train, test } = halfSplit(peers);
+  const walkForwardBase = tokenCount(train) / train.length;
+  const withToken = tokenCount(peers);
+  const baseRate = withToken / peers.length;
+  const terms = oddsTerms.map((term, index) => {
+    const featureCount = index + 1;
+    const folds = Array.from({ length: Math.min(10, peers.length) }, (_, fold) =>
+      fitLogit(peers.filter((_, i) => i % 10 !== fold), featureCount));
+    const earlierFit = fitLogit(train, featureCount);
     return {
-      category,
-      category_n: categoryRatios.length,
-      category_median: categoryRatios.length ? median(categoryRatios) : null,
-      n,
-      median: middle,
-      used,
+      ...term,
+      tenfold_brier: brier(peers, (peer, i) => folds[i % 10].predict(peer)),
+      walk_forward_brier: brier(test, earlierFit.predict),
     };
   });
-  const multiples = new Map(categoryMultiples.map(entry => [entry.category, entry.used]));
-  const watchlist = new Set(snapshot.watchlist);
-  const asOf = calendarDay(snapshot.as_of);
+  return {
+    fit,
+    terms,
+    validation: {
+      peers: peers.length,
+      with_token: withToken,
+      base_rate: baseRate,
+      // The experiment uses the overall base rate as its ten-fold reference.
+      base_brier_tenfold: brier(peers, () => baseRate),
+      base_brier_walk_forward: brier(test, () => walkForwardBase),
+      tenfold_brier: terms[0].tenfold_brier,
+      walk_forward_brier: terms[0].walk_forward_brier,
+    },
+  };
+}
 
-  const board: BoardRow[] = snapshot.protocols.filter(isEligible).map(p => {
-    const multiple = multiples.get(p.category)!;
+export function buildRadar(snapshot: Snapshot) {
+  const asOf = calendarDay(snapshot.as_of);
+  const valuePeers = snapshot.protocols.flatMap(p =>
+    !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0 ? [{
+      category: p.category,
+      logTvl: Math.log10(p.tvl_usd),
+      logMcap: Math.log10(p.mcap_usd),
+      listed: p.listed_at === null ? asOf - 365 : calendarDay(p.listed_at),
+    }] : []);
+  const oddsPeers = snapshot.protocols.flatMap(p => {
+    if (p.listed_at === null) return [];
+    const listed = calendarDay(p.listed_at);
+    const age = asOf - listed;
+    if (age < 730) return [];
+    return [{
+      category: p.category,
+      listed,
+      hasToken: Number(!isPreToken(p)),
+      logAge: Math.log(age / 365),
+      logTvl: Math.log10(Math.max(p.tvl_usd, 1)),
+      logChains: Math.log(Math.max(p.chains.length, 1)),
+      growth: Math.max(-30, Math.min(60, (p.change_7d ?? 0) * 100)) / 100,
+    }];
+  });
+  const value = fitAndValidateValue(valuePeers);
+  const oddsModel = fitAndValidateOdds(oddsPeers);
+  const { intercept, slope } = value.fit;
+  const { residual_q25: q25, residual_q75: q75 } = value.validation;
+  const logitIntercept = oddsModel.fit.intercept;
+  const logitAge = oddsModel.fit.coefficients[0];
+  const watchlist = new Set(snapshot.watchlist);
+  const excludedCounts = exclusionRules.map(() => 0);
+  const board: BoardRow[] = [];
+  let pretoken = 0;
+
+  for (const p of snapshot.protocols) {
+    if (!isPreToken(p)) continue;
+    pretoken++;
+    const reason = exclusionIndex(p);
+    if (reason !== -1) {
+      excludedCounts[reason]++;
+      continue;
+    }
     const ageDays = p.listed_at === null ? 365 : asOf - calendarDay(p.listed_at);
-    const growthMultiplier = 1 + Math.max(-30, Math.min(60, p.change_7d ?? 0)) / 100 * 0.5;
-    const maturityMultiplier = 0.7 + 0.3 * Math.min(ageDays, 1095) / 1095;
-    return {
+    const launch = p.tvl_usd === 0 ? 0 : 10 ** (value.fit.size(Math.log10(p.tvl_usd)) + value.fit.offset(p.category));
+    // A calendar-day snapshot can include a same-day or future listing.
+    const logAge = Math.log(Math.max(ageDays, 1) / 365);
+    const odds = Math.max(0.01, Math.min(0.99, sigmoid(logitIntercept + logitAge * logAge)));
+    const budget = positionTier(p.tvl_usd).budgetHigh;
+    const participating = Math.max(FARM_PARTICIPATION_RATE * p.tvl_usd, FARM_PARTICIPATION_FLOOR_USD);
+    const share = budget / (budget + participating);
+    const expected = odds * launch * FARM_ALLOC_SHARE * share;
+    const tx = p.chains[0] === 'Ethereum' ? FARM_TX_ETH_USD : FARM_TX_OTHER_USD;
+    const net = Math.round(expected - tx);
+    const perHour = Math.round(net / FARM_HOURS * 10) / 10;
+    const verdict = net >= FARM_VERDICT_NET_MIN && perHour >= FARM_VERDICT_PER_HOUR_MIN
+      ? 'Farm' : net > 0 ? 'Marginal' : 'Skip';
+    board.push({
       slug: p.slug,
       name: p.name,
       rank: 0,
-      implied_value_usd: Math.max(1, Math.round(p.tvl_usd * multiple * growthMultiplier * maturityMultiplier)),
+      implied_value_usd: Math.max(1, Math.round(launch * odds)),
       farm_steps: farmPlan(p).concat(OPERATOR_NOTES.get(p.slug) ?? []),
       category: p.category,
       chains: p.chains,
@@ -220,33 +471,85 @@ export function buildRadar(snapshot: Snapshot) {
       change_7d: p.change_7d,
       listed_at: p.listed_at,
       age_days: ageDays,
-      multiple_used: Number(multiple.toFixed(4)),
-      growth_multiplier: growthMultiplier,
-      maturity_multiplier: maturityMultiplier,
+      launch_value_usd: Math.round(launch),
+      odds: Number(odds.toFixed(4)),
+      range_low_usd: Math.round(launch * 10 ** -q75 * odds),
+      range_high_usd: Math.round(launch * 10 ** -q25 * odds),
+      verdict,
+      farm_net_usd: net,
+      farm_per_hour_usd: perHour,
+      farm_budget_usd: budget,
       watchlist: watchlist.has(p.slug),
-    };
-  });
+    });
+  }
   board.sort((a, b) => b.implied_value_usd - a.implied_value_usd
     || b.tvl_usd - a.tvl_usd || compareText(a.slug, b.slug));
   board.forEach((row, index) => { row.rank = index + 1; });
 
+  const categoryOffsets = [...new Set(snapshot.protocols.map(p => p.category))]
+    .sort((a, b) => compareText(a ?? '', b ?? ''))
+    .map(category => {
+      const offset = value.fit.offset(category);
+      return { category, peers: value.fit.counts.get(category)?.n ?? 0, offset_log10: offset, offset_x: 10 ** offset };
+    });
+  const offsets = categoryOffsets.map(row => row.offset_log10);
+  const total = snapshot.protocols.length;
   const radar = {
     as_of: snapshot.as_of,
     floor_usd: snapshot.floor_usd,
     watchlist_total: snapshot.watchlist.length,
-    model: {
-      eligibility: 'The board requires both token fields to be empty and applies no TVL floor. It excludes CEX, Liquid Staking, Liquid Restaking, Restaked BTC, and every category containing Bridge. Names ending in a version marker such as V2 or 2.0, containing the whole words wrapped, staked, or staking, or starting with Binance, Coinbase, Bybit, Kraken, Bitget, OKX, Bitfinex, or Gemini are excluded.',
-      formula: 'Multiply TVL by the peer market-cap-to-TVL multiple, the growth multiplier, and the maturity multiplier. Round to whole dollars with a minimum of $1.',
-      winsorization: 'Divide each tokenized peer’s recorded market cap by its positive TVL. Clamp each ratio to the range 0.01× to 5× before taking any median to limit the influence of extreme ratios.',
-      growth: 'Clamp seven-day TVL change between -30% and +60%, then add half that change to 1. Missing change gives 1.',
-      maturity: 'Start at 0.7 and add up to 0.3 based on days since listing, capped at 1,095 days. Missing listing dates use 365 days.',
-      shrinkage: 'Weight the peer median by its sample size and the global median by six observations. With fewer than three category peers, pool the family. Categories outside a listed family pool with themselves. With no pooled peers, use the global median.',
-      scoring: 'Every eligible protocol uses the same scoring formula. Protocol names determine eligibility only. Operator notes appear in farm plans and have no effect on values or ranks.',
-      families,
-      global_median: globalMedian,
+    board_value_sum_usd: board.reduce((sum, row) => sum + row.implied_value_usd, 0),
+    farm_assumptions: {
+      alloc_share: FARM_ALLOC_SHARE,
+      participation_rate: FARM_PARTICIPATION_RATE,
+      participation_floor_usd: FARM_PARTICIPATION_FLOOR_USD,
+      hours: FARM_HOURS,
+      tx_eth_usd: FARM_TX_ETH_USD,
+      tx_other_usd: FARM_TX_OTHER_USD,
+      verdict_net_min: FARM_VERDICT_NET_MIN,
+      verdict_per_hour_min: FARM_VERDICT_PER_HOUR_MIN,
     },
-    category_multiples: categoryMultiples,
     rows: board,
+    model: {
+      formula: 'Estimate launch value with the fitted log-log TVL size curve plus a shrunk category offset. Multiply launch value by token odds to get implied value, rounded to whole dollars with a minimum of $1.',
+      fit: `The size curve was fitted to ${valuePeers.length} tokenized peers with positive TVL and market cap. The log10 intercept is ${intercept.toFixed(2)} and the slope is ${slope.toFixed(2)}.`,
+      offsets: 'Each category’s mean residual is weighted by its peer count and shrunk toward the global mean residual with six observations (k=6). Categories without peers use the global mean.',
+      odds: `Age-only logistic regression uses ${oddsPeers.length} peers listed at least 730 days before the snapshot, with a recorded token base rate of ${oddsModel.validation.base_rate.toFixed(3)}. These odds are the recorded history of comparable peers, not a forecast of whether or when any protocol launches a token.`,
+      range: 'The P25–P75 range uses leave-one-out residual quantiles for the size curve with category offsets, applied to launch value and scaled by token odds.',
+      verdict: 'This planning estimate assumes early users receive 10% of launch supply, with participating capital of 10% of TVL or $2 million, whichever is larger. Your share uses the top of the position-size band. Net subtracts $60 on Ethereum or $10 on other chains. The 26-week plan budgets 6.3 hours for setup, weekly checks, and exit. Farm requires at least $150 net and $20 per hour. Other positive net values are Marginal. Zero or negative net values are Skip.',
+      eligibility: 'The board requires both token fields to be empty and applies no TVL floor. It excludes CEX, Liquid Staking, Liquid Restaking, Restaked BTC, and every category containing Bridge. Names ending in a version marker such as V2 or 2.0, containing the whole words wrapped, staked, or staking, or starting with Binance, Coinbase, Bybit, Kraken, Bitget, OKX, Bitfinex, or Gemini are excluded.',
+      scoring: 'Every eligible protocol uses the same scoring formula. Protocol names determine eligibility only. Operator notes appear in farm plans and have no effect on values or ranks.',
+    },
+    validation: { ...value.validation, odds: oddsModel.validation },
+    evidence: {
+      value_terms: [
+        { term: 'Size curve (log-log OLS)', verdict: 'kept', loo: value.validation.loo.size_only },
+        {
+          term: '+ Category offsets (k=6 shrinkage)', verdict: 'kept',
+          loo: value.validation.loo.size_offsets, walk_forward: value.validation.walk_forward.size_offsets,
+        },
+        { term: '+ 7d growth', verdict: 'dropped', detail: `Project experiment: growth + age OLS increased LOO typical error to ${EXPERIMENT_GROWTH_AGE_LOO_ERROR_X.toFixed(2)}x.` },
+        { term: '+ Age', verdict: 'dropped', detail: `Project experiment: the full combination of size, category offsets, growth, and age increased LOO typical error to ${EXPERIMENT_FULL_COMBO_LOO_ERROR_X.toFixed(2)}x.` },
+      ],
+      odds_terms: oddsModel.terms,
+      fitted: {
+        intercept,
+        slope,
+        category_offset_min: Math.min(...offsets),
+        category_offset_max: Math.max(...offsets),
+        logit_intercept: logitIntercept,
+        logit_coef_log_age: logitAge,
+      },
+    },
+    accounting: {
+      total,
+      tokenized: total - pretoken,
+      pretoken,
+      ranked: board.length,
+      excluded_total: pretoken - board.length,
+      excluded_by_reason: exclusionRules.map(([reason], i) => ({ reason, count: excludedCounts[i] })),
+    },
+    category_offsets: categoryOffsets,
   };
   return { board, radar };
 }
@@ -282,6 +585,6 @@ export function boardIssue(board: unknown, snapshot: Snapshot): string | null {
   return missing === undefined ? null : `Missing watchlist protocol: ${missing}`;
 }
 
-export function dataScript(radar: ReturnType<typeof buildRadar>['radar']): string {
-  return `window.RADAR_DATA = ${JSON.stringify(radar)};\n`;
+export function dataScript(radar: ReturnType<typeof buildRadar>['radar'], checksum: string): string {
+  return `window.RADAR_DATA = ${JSON.stringify({ ...radar, checksum })};\n`;
 }

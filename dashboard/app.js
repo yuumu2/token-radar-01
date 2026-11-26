@@ -1,201 +1,408 @@
+'use strict';
+
 const byId = id => document.getElementById(id);
 const radar = window.RADAR_DATA;
+const integer = new Intl.NumberFormat('en-US');
+const dollars = new Intl.NumberFormat('en-US', {
+  style: 'currency', currency: 'USD', maximumFractionDigits: 0,
+});
+const hourly = new Intl.NumberFormat('en-US', {
+  style: 'currency', currency: 'USD', minimumFractionDigits: 1, maximumFractionDigits: 1,
+});
+const compactDollars = new Intl.NumberFormat('en-US', {
+  style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1,
+});
+const percent = new Intl.NumberFormat('en-US', { style: 'percent', maximumFractionDigits: 0 });
+const number = value => integer.format(value);
+const usd = value => dollars.format(value);
+const compact = value => compactDollars.format(value);
+const pct = value => percent.format(value);
+const fixed = value => value.toFixed(2);
+const miss = metrics => `x${fixed(metrics.typical_error_x)}`;
+const categoryName = category => category ?? 'Uncategorized';
+const range = (row, format) => `${format(row.range_low_usd)} – ${format(row.range_high_usd)}`;
 
-if (radar) {
-  start(radar);
-} else {
-  byId('snapshot').textContent = 'Board data is unavailable. Open this page from the generated output directory.';
+function el(tag, text, className) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;
+  if (className) node.className = className;
+  return node;
 }
 
-function start({ rows, as_of, watchlist_total, category_multiples, model }) {
-  const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-  const integer = new Intl.NumberFormat('en-US');
-  const decimal = new Intl.NumberFormat('en-US', { maximumFractionDigits: 8 });
-  const percent = new Intl.NumberFormat('en-US', { style: 'percent', signDisplay: 'exceptZero', maximumFractionDigits: 2 });
-  const compareText = new Intl.Collator('en-US', { sensitivity: 'base' }).compare;
-  const formatChange = value => value === null ? '—' : percent.format(value / 100);
-  const times = value => `${decimal.format(value)}×`;
-  const columns = [
-    { key: 'rank', label: 'Rank', numeric: true, format: integer.format },
-    { key: 'name', label: 'Protocol' },
-    { key: 'category', label: 'Category' },
-    { key: 'chains', label: 'Chains', format: value => value.join(', ') || '—' },
-    { key: 'tvl_usd', label: 'TVL', numeric: true, format: usd.format },
-    { key: 'change_7d', label: '7d change', numeric: true, format: formatChange },
-    { key: 'implied_value_usd', label: 'Implied value', numeric: true, format: usd.format },
-    { key: 'multiple_used', label: 'Multiple', numeric: true, format: times },
+function facts(entries, className = 'facts') {
+  const list = el('dl', undefined, className);
+  for (const [label, value] of entries) {
+    const item = el('div');
+    item.append(el('dt', label), el('dd', value));
+    list.append(item);
+  }
+  return list;
+}
+
+function pill(label) {
+  const styles = {
+    Farm: 'farm', Marginal: 'marginal', Skip: 'skip', kept: 'kept',
+    dropped: 'dropped', 'mixed - not used': 'mixed', 'not used': 'unused',
+  };
+  return el('span', label, `pill ${styles[label] ?? ''}`);
+}
+
+function checksum(rows) {
+  const bytes = new TextEncoder().encode(JSON.stringify({ rows }));
+  let hash = 0x811c9dc5;
+  for (const byte of bytes) hash = Math.imul(hash ^ byte, 0x01000193);
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function renderOverview() {
+  const { accounting, evidence, rows, validation, watchlist_total } = radar;
+  const { loo, walk_forward, odds, range_coverage, value_peers } = validation;
+  const farmCount = rows.filter(row => row.verdict === 'Farm').length;
+  const watchCount = rows.filter(row => row.watchlist).length;
+  const valueKept = evidence.value_terms.filter(term => term.verdict === 'kept').length;
+  const oddsKept = evidence.odds_terms.filter(term => term.verdict === 'kept').length;
+  const cards = [
+    ['Leave-one-out miss', miss(loo.size_offsets), `Typical error · ${number(value_peers)} peers`],
+    ['Walk-forward miss', miss(walk_forward.size_offsets), 'Typical error · later-listed half'],
+    ['Range honesty', pct(range_coverage), 'Held-out peers inside P25–P75'],
+    ['Odds Brier · ten-fold', odds.tenfold_brier.toFixed(4), `Base rate ${odds.base_brier_tenfold.toFixed(4)}`],
+    ['Terms surviving', `${valueKept} value · ${oddsKept} odds`, `Odds kept ${oddsKept} of ${evidence.odds_terms.length} tested`],
+    ['Farm-worthy', number(farmCount), `Of ${number(accounting.ranked)} ranked protocols`],
+    ['Watchlist coverage', `${watchCount}/${watchlist_total}`, 'Watchlist protocols ranked'],
   ];
-  const categories = new Map(category_multiples.map(peer => [peer.category, peer]));
-  let sort = { key: 'rank', descending: false };
-  let selected = rows[0]?.slug;
-
-  function element(tag, text, className) {
-    const result = document.createElement(tag);
-    if (text !== undefined) result.textContent = text;
-    if (className) result.className = className;
-    return result;
+  byId('snapshot').textContent = `Snapshot · ${radar.as_of}`;
+  for (const [label, value, detail] of cards) {
+    const metric = el('article', undefined, 'metric');
+    metric.append(el('h3', label), el('strong', value), el('p', detail));
+    byId('validation').append(metric);
   }
 
-  function definitions(entries) {
-    return entries.map(([label, value]) => {
-      const pair = element('div');
-      pair.append(element('dt', label), element('dd', value));
-      return pair;
-    });
+  const { total, tokenized, pretoken, ranked, excluded_total, excluded_by_reason } = accounting;
+  const exclusionText = excluded_by_reason.map(item => `${item.reason} ${number(item.count)}`).join(' · ');
+  byId('accounting').append(
+    el('strong', `${number(total)} snapshot protocols`),
+    ` = ${number(tokenized)} tokenized + ${number(pretoken)} pre-token. `,
+    `${number(pretoken)} pre-token = ${number(ranked)} ranked + ${number(excluded_total)} excluded (${exclusionText}).`,
+  );
+
+  const sum = rows.reduce((value, row) => value + row.implied_value_usd, 0);
+  const excluded = excluded_by_reason.reduce((value, item) => value + item.count, 0);
+  const accounted = tokenized + rows.length + excluded;
+  const actualChecksum = checksum(rows);
+  const checks = [
+    [`${number(rows.length)} ranked rows`, rows.length === ranked],
+    [`${usd(sum)} total implied`, sum === radar.board_value_sum_usd],
+    [`${watchCount}/${watchlist_total} watchlist rows`, watchCount === watchlist_total],
+    [`Board checksum ${actualChecksum}`, actualChecksum === radar.checksum],
+    [`${number(accounted)} / ${number(total)} accounted`,
+      accounted === total && total === tokenized + pretoken && pretoken === ranked + excluded_total
+        && excluded === excluded_total && rows.length === ranked],
+  ];
+  for (const [label, passes] of checks) {
+    const check = el('li', undefined, passes ? 'pass' : 'fail');
+    check.append(el('span', passes ? '✓ ' : '✕ '), label);
+    check.setAttribute('aria-label', `${passes ? 'Pass' : 'Mismatch'} — ${label}`);
+    byId('integrity').append(check);
+  }
+}
+
+function steps(row) {
+  const list = el('ol');
+  for (const text of row.farm_steps) list.append(el('li', text));
+  return list;
+}
+
+function transactionCost(row) {
+  const assumptions = radar.farm_assumptions;
+  return row.chains[0] === 'Ethereum' ? assumptions.tx_eth_usd : assumptions.tx_other_usd;
+}
+
+function evidenceRow(term, cells, verdict, detail) {
+  const row = el('tr');
+  const name = el('th', term);
+  name.scope = 'row';
+  if (detail) name.append(el('small', detail));
+  row.append(name);
+  for (const { value, note } of cells) {
+    const cell = el('td', value, 'num');
+    if (note) cell.append(el('small', note));
+    row.append(cell);
+  }
+  const status = el('td');
+  status.append(pill(verdict));
+  row.append(status);
+  return row;
+}
+
+function renderMethod() {
+  const { evidence, category_offsets, model, validation } = radar;
+  const valueCell = metrics => metrics ? {
+    value: miss(metrics),
+    note: `${pct(metrics.within2x)} within 2× · median ${fixed(metrics.median_ratio)}×`,
+  } : { value: '—' };
+  for (const term of evidence.value_terms) {
+    byId('value-terms').append(evidenceRow(
+      term.term, [valueCell(term.loo), valueCell(term.walk_forward)], term.verdict, term.detail,
+    ));
+  }
+  const base = validation.odds;
+  byId('odds-terms').append(evidenceRow('Base rate', [
+    { value: base.base_brier_tenfold.toFixed(4) }, { value: base.base_brier_walk_forward.toFixed(4) },
+  ], 'reference'));
+  for (const term of evidence.odds_terms) {
+    byId('odds-terms').append(evidenceRow(term.term, [
+      { value: term.tenfold_brier.toFixed(4) }, { value: term.walk_forward_brier.toFixed(4) },
+    ], term.verdict));
   }
 
-  function addOptions(id, values) {
-    const select = byId(id);
-    for (const value of [...new Set(values)].sort(compareText)) {
-      const option = element('option', value);
-      option.value = value;
-      select.append(option);
-    }
+  const fit = evidence.fitted;
+  byId('coefficients').append(...facts([
+    ['Log10 value intercept', fixed(fit.intercept)],
+    ['Log10 TVL slope', fixed(fit.slope)],
+    ['Category offset range (log10)', `${fixed(fit.category_offset_min)} to ${fixed(fit.category_offset_max)}`],
+    ['Logit intercept', fixed(fit.logit_intercept)],
+    ['Log-age coefficient', fixed(fit.logit_coef_log_age)],
+  ]).children);
+  for (const entry of category_offsets) {
+    const row = el('tr');
+    const label = el('th', categoryName(entry.category));
+    label.scope = 'row';
+    row.append(label, el('td', number(entry.peers), 'num'), el('td', `${fixed(entry.offset_x)}×`, 'num'));
+    byId('offsets').append(row);
   }
+  const labels = {
+    formula: 'Scoring formula', fit: 'Size curve', offsets: 'Category offsets', odds: 'Token odds',
+    range: 'Valuation range', verdict: 'Farm planning assumptions', eligibility: 'Eligibility', scoring: 'Scoring rules',
+  };
+  byId('method').append(...facts(Object.entries(model).map(([key, value]) => [labels[key] ?? key, value])).children);
+}
 
-  function showProfile(row) {
-    byId('profile-title').textContent = row?.name ?? 'Protocol profile';
-    const profile = byId('profile-body');
-    if (!row) {
-      profile.replaceChildren(element('p', 'No protocols match these filters.', 'context'));
-      return;
-    }
-    const peers = categories.get(row.category);
-    const breakdown = element('div', undefined, 'calculation');
-    const factors = element('dl');
-    factors.append(...definitions([
-      ['TVL', usd.format(row.tvl_usd)],
-      ['× Category multiple', times(peers.used)],
-      ['× Growth multiplier', times(row.growth_multiplier)],
-      ['× Maturity multiplier', times(row.maturity_multiplier)],
-    ]));
-    breakdown.append(factors, element('output', `= ${usd.format(row.implied_value_usd)}`));
-    const categoryStats = `${integer.format(peers.category_n)} category peers · category median ${peers.category_median === null ? 'unavailable' : times(peers.category_median)}`;
-    const calibrationStats = peers.n === 0
-      ? ` Global median ${times(model.global_median)} used.`
-      : peers.n !== peers.category_n
-        ? ` Family pool of ${integer.format(peers.n)} peers · pooled median ${times(peers.median)}.`
-        : '';
-    const facts = element('dl', undefined, 'facts');
-    facts.append(...definitions([
-      ['Chains', row.chains.join(', ') || 'Unknown'],
-      ['Listed date', row.listed_at ?? 'Unknown'],
-      ['Tokenless age', row.listed_at ? `${integer.format(row.age_days)} days` : '365 days (model default)'],
-      ['7d TVL change', formatChange(row.change_7d)],
-    ]));
-    const plan = element('ol');
-    plan.append(...row.farm_steps.map(step => element('li', step)));
-    profile.replaceChildren(
-      element('p', [`Rank ${row.rank}`, row.category ?? 'Uncategorized', row.watchlist ? 'Watchlist' : null].filter(Boolean).join(' · '), 'context'),
-      element('h3', 'Implied value calculation'), breakdown, element('p', categoryStats + '.' + calibrationStats, 'peer-summary'),
-      element('h3', 'Protocol facts'), facts, element('h3', 'Farm plan'), plan,
-    );
+function detailBlock(title, entries) {
+  const section = el('section', undefined, 'detail-block');
+  section.append(el('h3', title), facts(entries));
+  return section;
+}
+
+function renderProfile(row, offsets) {
+  const title = byId('profile-title');
+  const body = byId('profile-body');
+  if (!row) {
+    title.textContent = 'Protocol profile';
+    body.replaceChildren(el('p', 'Select a protocol to see its valuation and farm plan.'));
+    return;
   }
+  const { evidence: { fitted }, farm_assumptions: farm, validation: { odds } } = radar;
+  const offset = offsets.get(row.category);
+  const tx = transactionCost(row);
+  const participating = Math.max(row.tvl_usd * farm.participation_rate, farm.participation_floor_usd);
+  const share = row.farm_budget_usd / (row.farm_budget_usd + participating);
 
-  function compareRows(a, b) {
-    const left = a[sort.key];
-    const right = b[sort.key];
-    if (left === null || right === null) {
-      return (left === null ? 1 : 0) - (right === null ? 1 : 0) || a.rank - b.rank;
-    }
-    const result = typeof left === 'number' ? left - right : compareText(String(left), String(right));
-    return (sort.descending ? -result : result) || a.rank - b.rank;
+  // Recover the full-precision inputs used before the row values were rounded.
+  const logTvl = Math.log10(row.tvl_usd);
+  const launch = row.tvl_usd === 0 ? 0 : 10 ** (fitted.intercept + fitted.slope * logTvl + offset.offset_log10);
+  const years = Math.max(row.age_days, 1) / 365;
+  const logit = fitted.logit_intercept + fitted.logit_coef_log_age * Math.log(years);
+  const probability = Math.max(0.01, Math.min(0.99, 1 / (1 + Math.exp(-logit))));
+  const expected = probability * launch * farm.alloc_share * share;
+
+  title.textContent = row.name;
+  const context = el('div', undefined, 'profile-context');
+  context.append(pill(row.verdict), el('span', `Rank ${number(row.rank)}`));
+  if (row.watchlist) context.append(el('span', 'Watchlist'));
+  const protocol = detailBlock('Protocol', [
+    ['TVL', usd(row.tvl_usd)],
+    ['Category', categoryName(row.category)],
+    ['Chains', row.chains.join(', ') || 'Unrecorded'],
+    ['Listed', row.listed_at ?? 'Unrecorded'],
+    ['Age at snapshot', `${number(row.age_days)} days${row.listed_at === null ? ' (assumed)' : ''}`],
+  ]);
+  const valuation = detailBlock('Valuation', [
+    ['Fitted launch value', usd(row.launch_value_usd)],
+    ['Token odds', pct(row.odds)],
+    ['Implied value', usd(row.implied_value_usd)],
+    ['P25–P75 range', range(row, usd)],
+  ]);
+  const launchFormula = row.tvl_usd === 0
+    ? 'Zero recorded TVL gives a launch value of'
+    : `10^(${fixed(fitted.intercept)} + ${fixed(fitted.slope)} × log10(${number(row.tvl_usd)})) × ${fixed(offset.offset_x)} category offset ≈`;
+  const arithmetic = el('p', `${launchFormula} `, 'formula');
+  arithmetic.append(el('strong', usd(row.launch_value_usd)));
+  const oddsLine = `Logistic on log age fitted on ${number(odds.peers)} peers (base rate ${(odds.base_rate * 100).toFixed(1)}%). At ${fixed(years)} years, this row’s odds are ${pct(row.odds)}.`;
+  valuation.append(arithmetic, el('p', oddsLine),
+    el('p', `${usd(row.launch_value_usd)} launch × ${pct(row.odds)} odds ≈ ${usd(row.implied_value_usd)} implied.`, 'formula'));
+  const economics = detailBlock('Farm economics', [
+    ['Position band top', usd(row.farm_budget_usd)],
+    ['Participating capital', usd(participating)],
+    ['Budget share of pool', `${(share * 100).toFixed(4)}%`],
+    ['Early-user allocation', pct(farm.alloc_share)],
+    ['Expected value before cost', usd(expected)],
+    ['Estimated transaction cost', usd(tx)],
+    ['Net', usd(row.farm_net_usd)],
+    ['Time over 26 weeks', `${farm.hours} hours`],
+    ['Net per hour', hourly.format(row.farm_per_hour_usd)],
+  ]);
+  economics.append(
+    el('p', `Planning estimate. Participating capital uses the larger of ${pct(farm.participation_rate)} of TVL and ${usd(farm.participation_floor_usd)}. Expected value multiplies launch value by odds, early-user allocation, and budget share.`),
+    el('p', `Farm requires at least ${usd(farm.verdict_net_min)} net and ${usd(farm.verdict_per_hour_min)} per hour. Other positive net values are Marginal. Zero or negative net values are Skip.`),
+  );
+  const grid = el('div', undefined, 'profile-grid');
+  grid.append(protocol, valuation, economics);
+  const plan = el('section', undefined, 'profile-steps');
+  plan.append(el('h3', 'Farm steps'), steps(row));
+  body.replaceChildren(context, grid, plan);
+}
+
+function renderRankRow(row, index, expanded) {
+  const tr = el('tr', undefined, `rank-row${index % 2 ? ' alternate' : ''}${expanded ? ' expanded' : ''}`);
+  tr.dataset.slug = row.slug;
+
+  const protocol = el('td', undefined, 'protocol-cell');
+  const button = el('button', row.name, 'protocol-button ellipsis');
+  button.type = 'button';
+  button.title = row.name;
+  button.setAttribute('aria-expanded', String(expanded));
+  if (expanded) button.setAttribute('aria-controls', `plan-${row.slug}`);
+  const category = el('span', categoryName(row.category), 'ellipsis category-name');
+  category.title = category.textContent;
+  protocol.append(button, category);
+
+  const chains = el('td', undefined, 'chain-cell');
+  const preview = el('div', undefined, 'chain-preview');
+  preview.title = row.chains.join(', ');
+  preview.append(el('span', row.chains.slice(0, 2).join(', ') || '—', 'ellipsis'));
+  if (row.chains.length > 2) {
+    const extra = row.chains.length - 2;
+    const badge = el('span', `+${extra}`, 'chain-more');
+    badge.setAttribute('aria-label', `${extra} more chains`);
+    preview.append(badge);
   }
+  chains.append(preview);
+  const verdict = el('td');
+  verdict.append(pill(row.verdict));
+  const expand = el('td', expanded ? '−' : '+', 'expand-icon');
+  expand.setAttribute('aria-hidden', 'true');
+  tr.append(
+    el('td', number(row.rank), 'num'), protocol, chains, el('td', compact(row.tvl_usd), 'num'),
+    el('td', compact(row.launch_value_usd), 'num'), el('td', compact(row.implied_value_usd), 'num implied'),
+    el('td', pct(row.odds), 'num'), el('td', range(row, compact), 'num'), verdict,
+    el('td', compact(row.farm_net_usd), 'num'), el('td', hourly.format(row.farm_per_hour_usd), 'num'), expand,
+  );
+  return tr;
+}
 
-  function render() {
-    const query = byId('search').value.trim().toLowerCase();
-    const category = byId('category').value;
-    const chain = byId('chain').value;
-    const onlyWatchlist = byId('watchlist').checked;
-    const visible = rows.filter(row =>
-      (!query || row.name.toLowerCase().includes(query) || row.slug.toLowerCase().includes(query))
-      && (!category || (row.category ?? 'Uncategorized') === category)
-      && (!chain || row.chains.includes(chain))
-      && (!onlyWatchlist || row.watchlist)).sort(compareRows);
+function renderInlinePlan(row) {
+  const tr = el('tr', undefined, 'inline-plan');
+  const cell = el('td');
+  cell.colSpan = 12;
+  const content = el('div', undefined, 'plan-content');
+  content.id = `plan-${row.slug}`;
+  const tx = transactionCost(row);
+  const budgetLine = `Position band top ${usd(row.farm_budget_usd)} · Estimated transaction cost ${usd(tx)} · ${radar.farm_assumptions.hours} hours · Net ${usd(row.farm_net_usd)} · ${hourly.format(row.farm_per_hour_usd)}/hour`;
+  content.append(el('h3', `${row.name} farm steps`), el('p', budgetLine), steps(row));
+  cell.append(content);
+  tr.append(cell);
+  return tr;
+}
 
-    const active = visible.find(row => row.slug === selected) ?? visible[0];
-    selected = active?.slug;
-    showProfile(active);
-    byId('count').textContent = `${integer.format(visible.length)} of ${integer.format(rows.length)} protocols`;
-    for (const { key, label, header, button } of columns) {
-      if (key === sort.key) {
-        header.setAttribute('aria-sort', sort.descending ? 'descending' : 'ascending');
-      } else {
-        header.removeAttribute('aria-sort');
-      }
-      button.textContent = key === sort.key ? `${label} ${sort.descending ? '↓' : '↑'}` : label;
-    }
+function setupBoard() {
+  const rows = radar.rows;
+  const rowsBySlug = new Map(rows.map(row => [row.slug, row]));
+  const offsets = new Map(radar.category_offsets.map(entry => [entry.category, entry]));
+  const category = byId('category');
+  const chain = byId('chain');
+  const search = byId('search');
+  const verdict = byId('verdict');
+  const watchlist = byId('watchlist');
+  const container = byId('rows');
+  const sortButtons = [...document.querySelectorAll('[data-sort]')];
+  const scroller = container.closest('.ranking-scroll');
+  let sortKey = 'rank';
+  let direction = 1;
+  let expandedSlug = null;
+
+  const categoryValues = [...new Set(rows.map(row => row.category))]
+    .sort((a, b) => categoryName(a).localeCompare(categoryName(b)));
+  for (const value of categoryValues) category.add(new Option(categoryName(value), JSON.stringify(value)));
+  for (const value of [...new Set(rows.flatMap(row => row.chains))].sort()) chain.add(new Option(value, value));
+
+  function renderRows(resetScroll = false, focusSlug = null) {
+    const query = search.value.trim().toLowerCase();
+    const chosenCategory = category.value ? JSON.parse(category.value) : undefined;
+    const visible = rows.filter(row => (!query || `${row.name} ${row.slug}`.toLowerCase().includes(query))
+      && (chosenCategory === undefined || row.category === chosenCategory)
+      && (!chain.value || row.chains.includes(chain.value))
+      && (!verdict.value || row.verdict === verdict.value)
+      && (!watchlist.checked || row.watchlist));
+    visible.sort((a, b) => direction * (a[sortKey] - b[sortKey]) || a.rank - b.rank);
 
     const fragment = document.createDocumentFragment();
-    for (const row of visible) {
-      const line = element('tr');
-      line.classList.toggle('selected', row.slug === selected);
-      for (const { key, numeric, format } of columns) {
-        const cell = element(key === 'name' ? 'th' : 'td', undefined, numeric ? 'number' : '');
-        if (key === 'name') {
-          cell.scope = 'row';
-          const button = element('button', row.name, 'protocol');
-          button.type = 'button';
-          button.setAttribute('aria-controls', 'profile');
-          if (row.slug === selected) button.setAttribute('aria-current', 'true');
-          button.addEventListener('click', () => {
-            const previous = byId('rows').querySelector('[aria-current]');
-            previous?.removeAttribute('aria-current');
-            previous?.closest('tr').classList.remove('selected');
-            selected = row.slug;
-            line.classList.add('selected');
-            button.setAttribute('aria-current', 'true');
-            showProfile(row);
-            byId('profile-title').focus();
-          });
-          cell.append(button);
-          if (row.watchlist) cell.append(element('span', 'Watchlist', 'watch'));
-        } else {
-          cell.textContent = format ? format(row[key]) : row[key] ?? '—';
-        }
-        line.append(cell);
-      }
-      fragment.append(line);
-    }
-    byId('rows').replaceChildren(fragment);
-  }
-
-  const headers = element('tr');
-  for (const column of columns) {
-    const { key, numeric } = column;
-    const header = element('th', undefined, numeric ? 'number' : '');
-    header.scope = 'col';
-    const button = element('button');
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      sort = { key, descending: sort.key === key ? !sort.descending : numeric && key !== 'rank' };
-      render();
+    let focusButton;
+    visible.forEach((row, index) => {
+      const expanded = row.slug === expandedSlug;
+      const tr = renderRankRow(row, index, expanded);
+      fragment.append(tr);
+      if (expanded) fragment.append(renderInlinePlan(row));
+      if (row.slug === focusSlug) focusButton = tr.querySelector('button');
     });
-    column.header = header;
-    column.button = button;
-    header.append(button);
-    headers.append(header);
+    if (!visible.length) {
+      const empty = el('tr');
+      const cell = el('td', 'No protocols match these filters.', 'empty');
+      cell.colSpan = 12;
+      empty.append(cell);
+      fragment.append(empty);
+    }
+    const scrollTop = resetScroll ? 0 : scroller.scrollTop;
+    container.replaceChildren(fragment);
+    scroller.scrollTop = scrollTop;
+    byId('count').textContent = `${number(visible.length)} of ${number(rows.length)} protocols`;
+    focusButton?.focus({ preventScroll: true });
   }
 
-  byId('columns').append(headers);
-  addOptions('category', rows.map(row => row.category ?? 'Uncategorized'));
-  addOptions('chain', rows.flatMap(row => row.chains));
   byId('filters').addEventListener('submit', event => event.preventDefault());
-  byId('search').addEventListener('input', render);
-  for (const id of ['category', 'chain', 'watchlist']) byId(id).addEventListener('change', render);
+  search.addEventListener('input', () => renderRows(true));
+  for (const control of [category, chain, verdict, watchlist]) {
+    control.addEventListener('change', () => renderRows(true));
+  }
+  for (const button of sortButtons) {
+    button.addEventListener('click', () => {
+      if (sortKey === button.dataset.sort) direction *= -1;
+      else {
+        sortKey = button.dataset.sort;
+        direction = sortKey === 'rank' ? 1 : -1;
+      }
+      for (const header of sortButtons) {
+        const th = header.closest('th');
+        const arrow = header.querySelector('span');
+        if (header.dataset.sort === sortKey) {
+          th.setAttribute('aria-sort', direction === 1 ? 'ascending' : 'descending');
+          arrow.textContent = direction === 1 ? '↑' : '↓';
+        } else {
+          th.removeAttribute('aria-sort');
+          arrow.textContent = '↕';
+        }
+      }
+      renderRows(true);
+    });
+  }
+  container.addEventListener('click', event => {
+    const tr = event.target.closest('tr[data-slug]');
+    if (!tr) return;
+    const row = rowsBySlug.get(tr.dataset.slug);
+    expandedSlug = expandedSlug === row.slug ? null : row.slug;
+    renderProfile(row, offsets);
+    renderRows(false, row.slug);
+  });
 
-  const watched = rows.filter(row => row.watchlist).length;
-  byId('snapshot').textContent = `Snapshot ${as_of}`;
-  byId('coverage').textContent = `${integer.format(rows.length)} eligible protocols · ${watched}/${watchlist_total} watchlist coverage`;
-  byId('method').append(...definitions([
-    ['Eligibility', model.eligibility],
-    ['Implied value', model.formula],
-    ['Calibrating the multiple', `${model.winsorization} ${model.shrinkage} The global median is ${times(model.global_median)}.`],
-    ['Category families', Object.entries(model.families).map(([name, members]) => `${name[0].toUpperCase()}${name.slice(1)} (${members.join(', ')})`).join('. ') + '.'],
-    ['Growth adjustment', model.growth],
-    ['Maturity adjustment', model.maturity],
-    ['Consistent scoring', model.scoring],
-  ]));
+  renderRows();
+  renderProfile(rows[0], offsets);
+}
+
+if (radar && Array.isArray(radar.rows) && radar.farm_assumptions && typeof radar.checksum === 'string') {
+  renderOverview();
+  setupBoard();
+  renderMethod();
   byId('radar').hidden = false;
-  render();
+} else {
+  byId('load-error').textContent = 'Launch Radar data is missing or out of date. Open the dashboard alongside the generated v2 data.js.';
+  byId('load-error').hidden = false;
 }

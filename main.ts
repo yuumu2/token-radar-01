@@ -6,9 +6,8 @@ import { buildDossier } from './vendor/makefun-board.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
-function arg(name: string, fallback: string): string {
+function pathArg(args: string[], name: string, fallback: string): string {
   const flag = `--${name}`;
-  const args = process.argv.slice(2);
   const index = args.findIndex(value => value === flag || value.startsWith(`${flag}=`));
   if (index === -1) return fallback;
   const value = args[index] === flag ? args[index + 1] : args[index].slice(flag.length + 1);
@@ -25,9 +24,17 @@ function copyFiles(from: string, to: string): void {
   }
 }
 
-function main(): number {
-  const input = arg('input', '/input');
-  const out = arg('output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
+function boardChecksum(boardJson: string): string {
+  let hash = 0x811c9dc5;
+  for (const byte of Buffer.from(boardJson, 'utf8')) {
+    hash = Math.imul(hash ^ byte, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function main(args: string[]): number {
+  const input = pathArg(args, 'input', '/input');
+  const out = pathArg(args, 'output', process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
   const inputInfo = statSync(input, { throwIfNoEntry: false });
   const file = inputInfo?.isDirectory() || input === '/input' ? join(input, 'snapshot.json') : input;
   if (!statSync(file, { throwIfNoEntry: false })?.isFile()) {
@@ -40,9 +47,10 @@ function main(): number {
   const issue = boardIssue(board, snapshot);
   if (issue !== null) throw new Error(issue);
 
+  const boardJson = JSON.stringify({ rows: board });
   mkdirSync(out, { recursive: true });
-  writeFileSync(join(out, 'board.json'), `${JSON.stringify({ rows: board })}\n`);
-  writeFileSync(join(out, 'data.js'), dataScript(radar));
+  writeFileSync(join(out, 'board.json'), boardJson + '\n');
+  writeFileSync(join(out, 'data.js'), dataScript(radar, boardChecksum(boardJson)));
   for (const directory of ['dashboard', 'screenshots']) {
     copyFiles(join(here, directory), join(out, directory));
   }
@@ -52,7 +60,7 @@ function main(): number {
 }
 
 try {
-  process.exitCode = main();
+  process.exitCode = main(process.argv.slice(2));
 } catch (error) {
   console.error(`token radar: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;

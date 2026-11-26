@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Token Launch Radar</title>
+  <meta name="theme-color" content="#0b1422">
+  <title>Launch Radar</title>
   <link rel="stylesheet" href="app.css">
   <script defer src="../data.js"></script>
   <script defer src="app.js"></script>
@@ -12,38 +13,111 @@
   <main>
     <header class="masthead">
       <div>
-        <h1>Token Launch Radar</h1>
-        <p id="snapshot" role="status"></p>
+        <p id="snapshot" class="snapshot"></p>
+        <h1>Launch Radar</h1>
+        <p class="tagline">Pre-token protocols ranked by peer-fitted launch value, discounted by the peers’ token record.</p>
       </div>
-      <a href="#model">How scores work <span aria-hidden="true">↓</span></a>
+      <a href="#model">Method &amp; evidence <span aria-hidden="true">↓</span></a>
     </header>
+    <p id="load-error" class="error" role="alert" hidden></p>
+    <noscript><p class="error">Enable JavaScript to see the rankings and model evidence.</p></noscript>
     <div id="radar" hidden>
-      <div class="workspace">
-        <section class="panel board" aria-labelledby="board-title">
+      <section id="validation" class="validation" aria-label="Model validation"></section>
+      <section class="ledger" aria-label="Snapshot accounting">
+        <p id="accounting"></p>
+        <ul id="integrity" class="integrity" aria-label="Board integrity checks"></ul>
+      </section>
+
+      <section id="board" class="panel" aria-labelledby="board-title">
+        <div class="section-header">
           <h2 id="board-title">Protocol rankings</h2>
-          <form class="filters" id="filters">
-            <label>Search <input id="search" type="search" placeholder="Protocol name or slug"></label>
-            <label>Category <select id="category"><option value="">All categories</option></select></label>
-            <label>Chain <select id="chain"><option value="">All chains</option></select></label>
-            <label class="checkbox"><input id="watchlist" type="checkbox"> Watchlist only</label>
-          </form>
           <p id="count" role="status"></p>
-          <div class="table-scroll" tabindex="0" role="region" aria-label="Sortable protocol rankings">
-            <table aria-label="Protocol rankings">
-              <thead id="columns"></thead>
-              <tbody id="rows"></tbody>
-            </table>
-          </div>
+        </div>
+        <p class="odds-note">The odds column is the recorded token history of comparable long-listed peers, not a forecast of whether or when a protocol launches a token. Implied value equals fitted launch value × odds. Both values appear side by side in the table.</p>
+        <form id="filters" class="filters" role="search" aria-label="Filter rankings">
+          <label>Search <input id="search" type="search" placeholder="Protocol name or slug"></label>
+          <label>Category <select id="category"><option value="">All categories</option></select></label>
+          <label>Chain <select id="chain"><option value="">All chains</option></select></label>
+          <label>Verdict
+            <select id="verdict">
+              <option value="">All</option>
+              <option>Farm</option>
+              <option>Marginal</option>
+              <option>Skip</option>
+            </select>
+          </label>
+          <label class="checkbox"><input id="watchlist" type="checkbox"> Watchlist only</label>
+        </form>
+
+        <div class="table-scroll ranking-scroll" tabindex="0" role="region" aria-label="Scrollable protocol rankings">
+          <table class="rankings" aria-labelledby="board-title">
+            <thead>
+              <tr>
+                <th scope="col" class="num" aria-sort="ascending"><button type="button" data-sort="rank">Rank <span aria-hidden="true">↑</span></button></th>
+                <th scope="col">Protocol</th>
+                <th scope="col">Chains</th>
+                <th scope="col" class="num"><button type="button" data-sort="tvl_usd">TVL <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num"><button type="button" data-sort="launch_value_usd">Launch value <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num"><button type="button" data-sort="implied_value_usd">Implied <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num"><button type="button" data-sort="odds">Odds <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num">P25–P75</th>
+                <th scope="col">Verdict</th>
+                <th scope="col" class="num"><button type="button" data-sort="farm_net_usd">Net <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num">$/hour</th>
+                <th scope="col"><span class="sr-only">Expand farm plan</span></th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="profile" class="panel profile" aria-labelledby="profile-title">
+        <div class="section-header">
+          <h2 id="profile-title">Protocol profile</h2>
+          <a href="#board">Back to rankings <span aria-hidden="true">↑</span></a>
+        </div>
+        <div id="profile-body"></div>
+      </section>
+
+      <section id="model" class="panel methodology" aria-labelledby="model-title">
+        <h2 id="model-title">Method &amp; evidence</h2>
+        <div class="evidence">
+          <section aria-labelledby="value-title">
+            <h3 id="value-title">Value terms</h3>
+            <div class="table-scroll">
+              <table class="evidence-table" aria-labelledby="value-title">
+                <thead><tr><th scope="col">Term</th><th scope="col" class="num">Leave-one-out</th><th scope="col" class="num">Walk-forward</th><th scope="col">Verdict</th></tr></thead>
+                <tbody id="value-terms"></tbody>
+              </table>
+            </div>
+          </section>
+          <section aria-labelledby="odds-title">
+            <h3 id="odds-title">Odds terms</h3>
+            <div class="table-scroll">
+              <table class="evidence-table" aria-labelledby="odds-title">
+                <thead><tr><th scope="col">Term</th><th scope="col" class="num">Ten-fold Brier</th><th scope="col" class="num">Walk-forward Brier</th><th scope="col">Verdict</th></tr></thead>
+                <tbody id="odds-terms"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <section aria-labelledby="coefficients-title">
+          <h3 id="coefficients-title">Fitted coefficients</h3>
+          <dl id="coefficients" class="coefficients"></dl>
         </section>
-        <section class="panel profile" id="profile" aria-labelledby="profile-title">
-          <h2 id="profile-title" tabindex="-1">Protocol profile</h2>
-          <div id="profile-body"></div>
-        </section>
-      </div>
-      <section class="panel methodology" id="model" aria-labelledby="model-title">
-        <h2 id="model-title">How scores work</h2>
-        <p id="coverage"></p>
-        <dl id="method"></dl>
+        <div class="method-grid">
+          <section aria-labelledby="offsets-title">
+            <h3 id="offsets-title">Category offsets</h3>
+            <div class="table-scroll offset-scroll" tabindex="0" role="region" aria-label="Scrollable category offsets">
+              <table aria-labelledby="offsets-title">
+                <thead><tr><th scope="col">Category</th><th scope="col" class="num">Peers</th><th scope="col" class="num">Offset</th></tr></thead>
+                <tbody id="offsets"></tbody>
+              </table>
+            </div>
+          </section>
+          <dl id="method" class="method-copy"></dl>
+        </div>
       </section>
     </div>
   </main>
