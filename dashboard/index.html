@@ -62,7 +62,7 @@
                 <th scope="col" class="num"><button type="button" data-sort="odds">Odds <span aria-hidden="true">↕</span></button></th>
                 <th scope="col" class="num">P25–P75</th>
                 <th scope="col">Verdict</th>
-                <th scope="col" class="num"><button type="button" data-sort="farm_net_usd">Net <span aria-hidden="true">↕</span></button></th>
+                <th scope="col" class="num"><button type="button" data-sort="farm_net_usd">Net after fees <span aria-hidden="true">↕</span></button></th>
                 <th scope="col" class="num">$/hour</th>
                 <th scope="col"><span class="sr-only">Expand farm plan</span></th>
               </tr>
@@ -82,37 +82,42 @@
 
       <section id="model" class="panel methodology" aria-labelledby="model-title">
         <h2 id="model-title">Method &amp; evidence</h2>
-        <div class="evidence">
-          <section aria-labelledby="value-title">
-            <h3 id="value-title">Value terms</h3>
-            <div class="table-scroll">
-              <table class="evidence-table" aria-labelledby="value-title">
-                <thead><tr><th scope="col">Term</th><th scope="col" class="num">Leave-one-out</th><th scope="col" class="num">Walk-forward</th><th scope="col">Verdict</th></tr></thead>
-                <tbody id="value-terms"></tbody>
-              </table>
-            </div>
-          </section>
-          <section aria-labelledby="odds-title">
-            <h3 id="odds-title">Odds terms</h3>
-            <div class="table-scroll">
-              <table class="evidence-table" aria-labelledby="odds-title">
-                <thead><tr><th scope="col">Term</th><th scope="col" class="num">Ten-fold Brier</th><th scope="col" class="num">Walk-forward Brier</th><th scope="col">Verdict</th></tr></thead>
-                <tbody id="odds-terms"></tbody>
-              </table>
-            </div>
-          </section>
+        <div id="method">
+          <div class="evidence">
+            <section aria-labelledby="value-title">
+              <h3 id="value-title">Value terms</h3>
+              <div class="table-scroll">
+                <table class="evidence-table" aria-labelledby="value-title">
+                  <thead><tr><th scope="col">Term</th><th scope="col" class="num">Leave-one-out</th><th scope="col" class="num">Walk-forward</th><th scope="col">Verdict</th></tr></thead>
+                  <tbody id="value-terms"></tbody>
+                </table>
+              </div>
+            </section>
+            <section aria-labelledby="odds-title">
+              <h3 id="odds-title">Odds terms</h3>
+              <div class="table-scroll">
+                <table class="evidence-table" aria-labelledby="odds-title">
+                  <thead><tr><th scope="col">Term</th><th scope="col" class="num">Ten-fold Brier</th><th scope="col" class="num">Walk-forward Brier</th><th scope="col">Verdict</th></tr></thead>
+                  <tbody id="odds-terms"></tbody>
+                </table>
+              </div>
+            </section>
+          </div>
+          <div class="method-grid">
+            <section aria-labelledby="offsets-title">
+              <h3 id="offsets-title">Category offsets</h3>
+              <div id="offsets" class="offsets-grid"></div>
+            </section>
+            <section id="sensitivity" aria-labelledby="sensitivity-title">
+              <h3 id="sensitivity-title">Category sensitivity</h3>
+            </section>
+          </div>
         </div>
         <section aria-labelledby="coefficients-title">
           <h3 id="coefficients-title">Fitted coefficients</h3>
           <dl id="coefficients" class="coefficients"></dl>
         </section>
-        <div class="method-grid">
-          <section aria-labelledby="offsets-title">
-            <h3 id="offsets-title">Category offsets</h3>
-            <div id="offsets" class="offsets-grid"></div>
-          </section>
-          <dl id="method" class="method-copy"></dl>
-        </div>
+        <dl id="method-copy" class="method-copy"></dl>
       </section>
     </div>
   </main>
