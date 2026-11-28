@@ -179,14 +179,16 @@ li + li { margin-top: .29rem; }
 .detail-block { min-width: 0; padding: .78rem; border: 1px solid var(--line); border-radius: .43rem; background: #0e1929; }
 .detail-block h3 { margin-bottom: .4rem; }
 .detail-block p { margin-top: .5rem; color: var(--muted); font-size: .83rem; }
-.caution, .detail-block .caution {
-  margin-top: .5rem;
-  padding: .4rem .55rem;
-  border-left: 2px solid var(--amber);
-  background: #393128;
+.odds-tag {
+  display: inline-block;
+  padding: .05rem .25rem;
+  border: 1px solid var(--line);
+  border-radius: .25rem;
   color: var(--amber);
-  font-size: .83rem;
+  font-size: .68rem;
+  white-space: nowrap;
 }
+td .odds-tag { display: table; margin: .15rem 0 0 auto; }
 .facts > div { display: flex; justify-content: space-between; gap: .55rem; padding: .24rem 0; border-bottom: 1px solid #22334b; font-size: .83rem; }
 .facts > div:last-child { border-bottom: 0; }
 .facts dt { color: var(--muted); }
@@ -199,6 +201,10 @@ li + li { margin-top: .29rem; }
 .evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
 .evidence > section, .method-grid > section { min-width: 0; }
 .methodology h3 { margin: .85rem 0 .45rem; }
+.evidence-panel { margin: .75rem 0; padding: .75rem 1rem; border: 1px solid var(--line); border-radius: .43rem; background: #0e1929; }
+.evidence-panel h3 { margin-top: 0; }
+.evidence-panel li + li { margin-top: .3rem; }
+.growth-panel { border-left: 3px solid var(--accent); }
 .evidence-table { min-width: 29rem; line-height: 1.34; }
 .evidence-table th, .evidence-table td { padding: .36rem .5rem; }
 .evidence-table small { display: block; margin-top: .18rem; color: var(--muted); }

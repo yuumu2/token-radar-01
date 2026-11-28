@@ -45,6 +45,7 @@ interface BoardRow {
   age_days: number;
   launch_value_usd: number;
   odds: number;
+  odds_extrapolated: boolean;
   range_low_usd: number;
   range_high_usd: number;
   verdict: 'Farm' | 'Marginal' | 'Skip';
@@ -443,6 +444,7 @@ export function buildRadar(snapshot: Snapshot) {
   });
   const value = fitAndValidateValue(valuePeers);
   const oddsModel = fitAndValidateOdds(oddsPeers);
+  const youngestOddsPeerAge = oddsPeers.reduce((youngest, peer) => Math.min(youngest, asOf - peer.listed), Infinity);
   const { intercept, slope } = value.fit;
   const { residual_q25: q25, residual_q75: q75 } = value.validation;
   const logitIntercept = oddsModel.fit.intercept;
@@ -493,6 +495,7 @@ export function buildRadar(snapshot: Snapshot) {
       age_days: ageDays,
       launch_value_usd: Math.round(launch),
       odds: Number(odds.toFixed(4)),
+      odds_extrapolated: ageDays < youngestOddsPeerAge,
       range_low_usd: Math.round(launch * 10 ** -q75 * odds),
       range_high_usd: Math.round(launch * 10 ** -q25 * odds),
       verdict,

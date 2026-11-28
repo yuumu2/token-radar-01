@@ -83,6 +83,20 @@
       <section id="model" class="panel methodology" aria-labelledby="model-title">
         <h2 id="model-title">Method &amp; evidence</h2>
         <div id="method">
+          <section class="evidence-panel growth-panel" aria-labelledby="growth-title">
+            <h3 id="growth-title">Seven-day growth: tested, not used</h3>
+            <p>We tested seven-day growth in both models. The growth experiment worsened leave-one-out error for the value model, and the odds variant with growth had worse walk-forward Brier than the shipped age-only fit. The shipped score omits growth.</p>
+            <p id="growth-validation" class="evidence-note"></p>
+          </section>
+          <section class="evidence-panel" aria-labelledby="independent-sensitivity-title">
+            <h3 id="independent-sensitivity-title">Sensitivity (independent re-computation)</h3>
+            <ul>
+              <li>#1 Polymarket International holds #1 in 64% of 1,000 bootstrap resamples of the 128 tokenized peers and stays in the top 5 in 99%; when #1 moves, it goes almost always to Steakhouse Financial.</li>
+              <li>The Prediction Market category offset (x2.54) rests on a single peer, Rain. Removing that offset moves Polymarket from #1 to #3 (confirmed by independent re-computation).</li>
+              <li>Neutralising every category offset based on one peer or fewer (12 categories) still leaves Polymarket #2; extending that to two peers or fewer (20 categories) leaves it #3. The top group's membership does not change.</li>
+              <li>The token-odds age coefficient is positive in all 500 bootstrap resamples and its Brier score is stable around 0.200 (spread 0.004). Ranking uncertainty comes from the value model's coefficients and thin-category offsets, not from the odds.</li>
+            </ul>
+          </section>
           <div class="evidence">
             <section aria-labelledby="value-title">
               <h3 id="value-title">Value terms</h3>

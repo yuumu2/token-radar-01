@@ -26,6 +26,8 @@ const sig4 = value => String(Number(value.toPrecision(4)));
 const miss = metrics => `x${fixed(metrics.typical_error_x)}`;
 const categoryName = category => category ?? 'Uncategorized';
 const range = (row, format) => `${format(row.range_low_usd)} – ${format(row.range_high_usd)}`;
+const extrapolationTag = () => el('span', 'odds extrapolated', 'odds-tag');
+const farmAllocation = farm => `Assumes ${pct(farm.alloc_share)} of launch supply goes to early users`;
 
 function launchFormula(row, fit, offset) {
   return row.tvl_usd === 0
@@ -72,7 +74,7 @@ function renderOverview() {
   const watchCount = rows.filter(row => row.watchlist).length;
   const valueKept = evidence.value_terms.filter(term => term.verdict === 'kept').length;
   const oddsKept = evidence.odds_terms.filter(term => term.verdict === 'kept').length;
-  const young = rows.filter(row => row.age_days < 730).length;
+  const young = rows.filter(row => row.odds_extrapolated).length;
   const cards = [
     ['Leave-one-out miss', miss(loo.size_offsets), `Typical error · ${number(value_peers)} peers`],
     ['Walk-forward miss', miss(walk_forward.size_offsets), 'Typical error · later-listed half'],
@@ -152,6 +154,9 @@ function evidenceRow(term, cells, verdict, detail) {
 
 function renderMethod() {
   const { evidence, category_offsets, model, validation } = radar;
+  const valueGrowth = evidence.value_terms.find(term => term.term === '+ 7d growth');
+  const oddsGrowth = evidence.odds_terms.find(term => term.term === '+ 7d growth');
+  byId('growth-validation').textContent = `${valueGrowth.detail} Walk-forward Brier was ${oddsGrowth.walk_forward_brier.toFixed(4)} with growth and ${validation.odds.walk_forward_brier.toFixed(4)} for age alone.`;
   const valueCell = metrics => metrics ? {
     value: miss(metrics),
     note: `${pct(metrics.within2x)} within 2× · median ${fixed(metrics.median_ratio)}×`,
@@ -171,10 +176,10 @@ function renderMethod() {
       { value: term.tenfold_brier.toFixed(4) }, { value: term.walk_forward_brier.toFixed(4) },
     ], term.verdict));
   }
-  const young = radar.rows.filter(row => row.age_days < 730).length;
+  const young = radar.rows.filter(row => row.odds_extrapolated).length;
   oddsTerms.closest('section').append(el('p',
     'A term is kept only if it improves both ten-fold and walk-forward Brier.', 'evidence-note'),
-  el('p', `${young} of ${radar.rows.length} ranked rows are younger than the 730-day peer cohort; their odds are extrapolations of the age fit.`, 'evidence-note'));
+  el('p', `${young} of ${radar.rows.length} ranked rows use ages below the youngest fitted peer, so their odds extend the age fit beyond its observed range.`, 'evidence-note'));
 
   const fit = evidence.fitted;
   byId('coefficients').append(...facts([
@@ -280,8 +285,10 @@ function renderProfile(row, offsets) {
   arithmetic.append(el('strong', usd(row.launch_value_usd)));
   const oddsLine = `Logistic on log age fitted on ${number(odds.peers)} peers (base rate ${(odds.base_rate * 100).toFixed(1)}%). At ${fixed(years)} years, this row’s odds are ${displayedOdds}.`;
   valuation.append(arithmetic, el('p', oddsLine));
-  if (row.age_days < 730) {
-    valuation.append(el('p', 'Extrapolated — this protocol is younger than the 2-year peer cohort (protocols listed at least 730 days before the snapshot) that the odds were fitted on, so its odds extend the age fit below the cohort’s range.', 'caution'));
+  if (row.odds_extrapolated) {
+    const note = el('p');
+    note.append(extrapolationTag(), ' The age used is below the fitted peer range.');
+    valuation.append(note);
   }
   valuation.append(el('p', `${usd(row.launch_value_usd)} launch × ${displayedOdds} odds ≈ ${usd(row.implied_value_usd)} implied.`, 'formula'));
   const economics = detailBlock('Farm economics', [
@@ -294,7 +301,7 @@ function renderProfile(row, offsets) {
     [`Net after fees at ${usd(row.farm_budget_low_usd)} (band bottom)`, usd(row.farm_net_low_usd)],
     [`Net after fees at ${usd(row.farm_budget_usd)} (band top)`, usd(row.farm_net_usd)],
     ['Time over 26 weeks', `${farm.hours} hours`],
-    ['Net per hour', hourly.format(row.farm_per_hour_usd)],
+    ['Net per hour', `${hourly.format(row.farm_per_hour_usd)} · ${farmAllocation(farm)}`],
   ]);
   economics.append(
     el('p', `Planning estimate. Participating capital uses the larger of ${pct(farm.participation_rate)} of TVL and ${usd(farm.participation_floor_usd)}. Peer-record-weighted value multiplies launch value by odds, early-user allocation, and budget share.`),
@@ -336,10 +343,12 @@ function renderRankRow(row, index, expanded) {
   verdict.append(pill(row.verdict));
   const expand = el('td', expanded ? '−' : '+', 'expand-icon');
   expand.setAttribute('aria-hidden', 'true');
+  const odds = el('td', pct(row.odds), 'num');
+  if (row.odds_extrapolated) odds.append(extrapolationTag());
   tr.append(
     el('td', number(row.rank), 'num'), protocol, chains, el('td', compact(row.tvl_usd), 'num'),
     el('td', compact(row.launch_value_usd), 'num'), el('td', compact(row.implied_value_usd), 'num implied'),
-    el('td', pct(row.odds), 'num'), el('td', range(row, compact), 'num'), verdict,
+    odds, el('td', range(row, compact), 'num'), verdict,
     el('td', compact(row.farm_net_usd), 'num'), el('td', hourly.format(row.farm_per_hour_usd), 'num'), expand,
   );
   return tr;
@@ -353,7 +362,8 @@ function renderInlinePlan(row) {
   content.id = `plan-${row.slug}`;
   const tx = transactionCost(row);
   const budgetLine = `Position band top ${usd(row.farm_budget_usd)} · Estimated transaction cost ${usd(tx)} · ${radar.farm_assumptions.hours} hours · Net after fees ${usd(row.farm_net_usd)} · ${hourly.format(row.farm_per_hour_usd)}/hour`;
-  content.append(el('h3', `${row.name} farm steps`), el('p', budgetLine), steps(row));
+  content.append(el('h3', `${row.name} farm steps`),
+    el('p', `${budgetLine} · ${farmAllocation(radar.farm_assumptions)}`), steps(row));
   cell.append(content);
   tr.append(cell);
   return tr;
